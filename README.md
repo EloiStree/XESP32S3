@@ -39,3 +39,16 @@ https://store.freenove.com/products/fnk0099
 With a SSD1306 I2C for debugging:       
 [<img width="471" height="463" alt="image" src="https://github.com/user-attachments/assets/7e156472-982d-42bb-a6eb-1c7dad8b81cf" />](https://www.amazon.com.be/-/en/Fasizi-Serial-128x64-Display-Arduino/dp/B09Z27KV42)     
 https://www.amazon.com.be/-/en/Fasizi-Serial-128x64-Display-Arduino/dp/B09Z27KV42
+
+
+-------------------
+
+# How to install 
+
+## From Window
+
+- To Do
+
+## From Frame
+
+- To Do
