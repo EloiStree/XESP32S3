@@ -29,3 +29,13 @@ https://github.com/eloistree/s2w
 Hope it helps someone! 🚀   
 
 ⚠️ You still need an adapter like Brook, or use Xbox Remove Play, if you want to use it on your Xbox.⚠️    
+
+
+
+I am using a Freenove ESP32S3 WROOM 1:      
+[<img width="1500" height="1500" alt="image" src="https://github.com/user-attachments/assets/36fb02d5-fa90-43e2-83b4-153c7dd3dd56" />](https://store.freenove.com/products/fnk0099)      
+https://store.freenove.com/products/fnk0099
+
+With a SSD1306 I2C for debugging:       
+[<img width="471" height="463" alt="image" src="https://github.com/user-attachments/assets/7e156472-982d-42bb-a6eb-1c7dad8b81cf" />](https://www.amazon.com.be/-/en/Fasizi-Serial-128x64-Display-Arduino/dp/B09Z27KV42)     
+https://www.amazon.com.be/-/en/Fasizi-Serial-128x64-Display-Arduino/dp/B09Z27KV42
