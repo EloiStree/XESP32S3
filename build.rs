@@ -1,8 +1,70 @@
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 fn main() {
+    emit_build_metadata();
     linker_be_nice();
     check_xtensa_linker_available();
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
     println!("cargo:rustc-link-arg=-Tlinkall.x");
+}
+
+fn emit_build_metadata() {
+    println!("cargo:rerun-if-changed=.git/HEAD");
+    println!("cargo:rerun-if-changed=.git/refs");
+    println!("cargo:rerun-if-changed=.git/packed-refs");
+
+    println!("cargo:rustc-env=XESP32S3_BUILD_DATE={}", build_date_utc());
+
+    let git_commit = match Command::new("git")
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        Ok(output) => {
+            println!(
+                "cargo:warning=Could not determine Git commit: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            String::new()
+        }
+        Err(error) => {
+            println!("cargo:warning=Could not run git to determine commit: {error}");
+            String::new()
+        }
+    };
+
+    let git_commit = if git_commit.is_empty() {
+        println!("cargo:warning=Build screen will show 'unknown' for the Git commit");
+        "unknown"
+    } else {
+        git_commit.as_str()
+    };
+    println!("cargo:rustc-env=XESP32S3_GIT_COMMIT={git_commit}");
+}
+
+fn build_date_utc() -> String {
+    let days_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before the Unix epoch")
+        .as_secs() as i64
+        / 86_400;
+
+    let days = days_since_epoch + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 #[cfg(unix)]

@@ -1,4 +1,4 @@
-//! Debug info shared between the UDP task and the OLED display task.
+//! Status shared between the Wi-Fi, UDP, and OLED display tasks.
 
 use core::fmt::Write;
 
@@ -21,8 +21,14 @@ pub struct DebugInfo {
     pub axes: Line,
 }
 
+#[derive(Clone, Copy)]
+pub enum WifiStatus {
+    WaitingForHotspot,
+    Connected,
+}
+
 pub static DEBUG: Signal<CriticalSectionRawMutex, DebugInfo> = Signal::new();
-pub static IP: Signal<CriticalSectionRawMutex, Line> = Signal::new();
+pub static WIFI_STATUS: Signal<CriticalSectionRawMutex, WifiStatus> = Signal::new();
 
 fn dpad_name(d: Direction) -> &'static str {
     match d {
