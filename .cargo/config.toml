@@ -2,7 +2,7 @@
 include = ["esp-config.toml"]
 
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --chip esp32s3 --port COM27"
+runner = "espflash flash --chip esp32s3 --port COM30"
 
 [build]
 rustflags = [

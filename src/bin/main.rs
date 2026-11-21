@@ -55,8 +55,8 @@ use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 use smart_leds_trait::{RGB8, SmartLedsWriteAsync};
 use static_cell::StaticCell;
 use xesp32s3::config::{
-    MDNS_HOST, SCREEN_SCL_GPIO, SCREEN_SDA_GPIO, STRIP_GPIO, STRIP_LED_COUNT, UART1_TX_GPIO,
-    UART2_TX_GPIO, UART_BAUD_RATE, UDP_PORT, WIFI_PASSWORD, WIFI_SSID,
+    DISPLAY_DEBUG_INFO, MDNS_HOST, SCREEN_SCL_GPIO, SCREEN_SDA_GPIO, STRIP_GPIO, STRIP_LED_COUNT,
+    UART1_TX_GPIO, UART2_TX_GPIO, UART_BAUD_RATE, UDP_PORT, WIFI_PASSWORD, WIFI_SSID,
 };
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
 use xesp32s3::integer_action_to_led_strip::IntegerActionToLedStrip;
@@ -194,7 +194,12 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(mdns_task(stack).unwrap());
     spawner.spawn(led_task(peripherals.RMT, peripherals.GPIO48, strip_pin).unwrap());
 
-    let i2c = I2c::new(peripherals.I2C0, I2cConfig::default())
+    // Higher I2C frequency (400 kHz) to overcome USB interrupt latency
+    let i2c = I2c::new(
+        peripherals.I2C0,
+        I2cConfig::default()
+            .with_frequency(Rate::from_khz(400))
+    )
         .expect("I2C config")
         .with_sda(screen_sda)
         .with_scl(screen_scl);
@@ -213,7 +218,7 @@ async fn main(spawner: Spawner) -> ! {
     usb_config.device_class = 0xFF;
     usb_config.device_sub_class = 0xFF;
     usb_config.device_protocol = 0xFF;
-    usb_config.composite_with_iads = false;
+    usb_config.composite_with_iads = false; //KEEP ON FALSE
     usb_config.max_power = 500;
     usb_config.max_packet_size_0 = 64;
 
@@ -592,8 +597,10 @@ async fn display_task(i2c: I2c<'static, Blocking>, stack: Stack<'static>) {
                     let _ = ip.push_str("IP: waiting...");
                 }
                 draw(11, &ip);
-                draw(22, &info.state);
-                draw(33, &info.axes);
+                if DISPLAY_DEBUG_INFO {
+                    draw(22, &info.state);
+                    draw(33, &info.axes);
+                }
                 draw(54, BUILD_INFO);
             }
         }
@@ -659,7 +666,9 @@ async fn udp_task(stack: Stack<'static>) {
         {
             let mut state = CONTROLLER.lock().await;
             let applied = process_udp(&mut state, packet);
-            DEBUG.signal(debug::describe(packet, applied, &state));
+            if DISPLAY_DEBUG_INFO {
+                DEBUG.signal(debug::describe(packet, applied, &state));
+            }
         }
 
         for command in udp_led_commands(packet) {

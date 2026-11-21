@@ -17,6 +17,10 @@ pub const UART_BAUD_RATE: u32 = 9_600;
 /// Number of WS2812B LEDs connected to the strip output.
 pub const STRIP_LED_COUNT: usize = 100;
 
+/// Enable debug display of Xbox input on the OLED screen.
+/// Set to false to disable input debug display and reduce display update latency.
+pub const DISPLAY_DEBUG_INFO: bool = true;
+
 /// GPIO for the LED strip data input.
 pub const STRIP_GPIO: u8 = 14;
 /// GPIO for UART1 transmit.
