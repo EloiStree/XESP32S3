@@ -61,6 +61,7 @@ use xesp32s3::config::{
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
 use xesp32s3::integer_action_to_led_strip::IntegerActionToLedStrip;
 use xesp32s3::network::{process_udp, udp_led_commands, CONTROLLER};
+use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
 
 const BUILD_INFO: &str = concat!(
@@ -73,6 +74,10 @@ const MAX_UDP_PAYLOAD: usize = 1472;
 type ForwardPacket = heapless::Vec<u8, MAX_UDP_PAYLOAD>;
 static UART_PACKETS: Channel<CriticalSectionRawMutex, ForwardPacket, 4> = Channel::new();
 static LED_COMMANDS: Channel<CriticalSectionRawMutex, u32, 32> = Channel::new();
+static DELAYED_INTEGERS: Channel<CriticalSectionRawMutex, (u32, u32), 64> = Channel::new();
+
+static DELAYER: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, IndexValueIntegerTimeMillisecondsDelayer> =
+    embassy_sync::mutex::Mutex::new(IndexValueIntegerTimeMillisecondsDelayer::new(0.0, 0.0));
 
 /// Answers the vendor control requests the Windows Xbox 360 driver issues at enumeration.
 struct XInputHandler {
@@ -218,7 +223,7 @@ async fn main(spawner: Spawner) -> ! {
     usb_config.device_class = 0xFF;
     usb_config.device_sub_class = 0xFF;
     usb_config.device_protocol = 0xFF;
-    usb_config.composite_with_iads = false; //KEEP ON FALSE
+    usb_config.composite_with_iads = false; //KEEP ON FALSE NOT TRUE
     usb_config.max_power = 500;
     usb_config.max_packet_size_0 = 64;
 
@@ -663,6 +668,20 @@ async fn udp_task(stack: Stack<'static>) {
             }
         };
         let packet = &buf[..len];
+        
+        // Check if UDP payload is divisible by 16 and process as delayed integers
+        {
+            let mut delayer = DELAYER.lock().await;
+            if delayer.append_value_if_dividable_by_16_and_not_1024(packet) {
+                rprintln!("IID format packet received and queued");
+                // Check for any delayed integers ready to execute
+                for delayed_value in delayer.check_for_integer_to_execute() {
+                    rprintln!("Executing delayed integer: index={}, value={}", delayed_value.m_index, delayed_value.m_integer);
+                    DELAYED_INTEGERS.send((delayed_value.m_index, delayed_value.m_integer)).await;
+                }
+            }
+        }
+        
         {
             let mut state = CONTROLLER.lock().await;
             let applied = process_udp(&mut state, packet);
