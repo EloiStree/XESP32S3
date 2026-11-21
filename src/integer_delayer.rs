@@ -5,6 +5,7 @@
 //! values are divisible by 16 (indicating valid IID format packets).
 
 use heapless::Vec;
+use embassy_time::Instant;
 
 /// Maximum number of delayed integers that can be queued
 const MAX_DELAYED_VALUES: usize = 256;
@@ -21,10 +22,12 @@ pub struct IndexValueIntegerToDelayValue {
 ///
 /// This allows precise scheduling of macro actions by receiving all instructions
 /// in one block and executing them at their scheduled millisecond precision times.
+#[allow(dead_code)]
 pub struct IndexValueIntegerTimeMillisecondsDelayer {
     delays_integer: Vec<IndexValueIntegerToDelayValue, MAX_DELAYED_VALUES>,
     rtc_time_ms: u64,
     tz_offset_ms: i64,
+    start_instant: Option<Instant>,
 }
 
 impl IndexValueIntegerTimeMillisecondsDelayer {
@@ -38,6 +41,7 @@ impl IndexValueIntegerTimeMillisecondsDelayer {
             delays_integer: Vec::new(),
             rtc_time_ms: (rtc_time_seconds * 1000.0) as u64,
             tz_offset_ms: (timezone_offset_seconds * 1000.0) as i64,
+            start_instant: None,
         }
     }
 
@@ -50,22 +54,29 @@ impl IndexValueIntegerTimeMillisecondsDelayer {
     /// - Delay time: 8 bytes (u64)
     ///
     /// If the delay value is under 36,000,000 ms, it's treated as milliseconds delay.
-    pub fn append_value_if_dividable_by_16_and_not_1024(&mut self, data: &[u8]) -> bool {
+    /// Returns (is_valid_iid_format, count_of_items_parsed)
+    pub fn append_value_if_dividable_by_16_and_not_1024(&mut self, data: &[u8]) -> (bool, usize) {
         let len = data.len();
 
         // Reject screen updates (1024 bytes)
         if len == 1024 {
-            return false;
+            esp_println::println!("[IID] Packet is 1024 bytes - screen update, not IID");
+            return (false, 0);
         }
 
         // Check if divisible by 16
         if len % 16 != 0 {
-            return false;
+            esp_println::println!("[IID] Packet size {} not divisible by 16", len);
+            return (false, 0);
         }
+
+        let mut parsed_count = 0;
+        let chunk_count = len / 16;
+        esp_println::println!("[IID] Processing {} bytes = {} chunks", len, chunk_count);
 
         // Process payload in 16-byte chunks
         // Format: 4-byte index + 4-byte value + 8-byte delay
-        for chunk in data.chunks_exact(16) {
+        for (chunk_idx, chunk) in data.chunks_exact(16).enumerate() {
             if let (Ok(idx_bytes), Ok(val_bytes), Ok(delay_bytes)) = (
                 <[u8; 4]>::try_from(&chunk[0..4]),
                 <[u8; 4]>::try_from(&chunk[4..8]),
@@ -77,23 +88,43 @@ impl IndexValueIntegerTimeMillisecondsDelayer {
 
                 // Only process if delay is reasonable (under ~10 hours)
                 if delay_ms < 36_000_000 {
-                    let _ = self.append_integer_to_delay_as_milliseconds(index, value, delay_ms as i64);
+                    esp_println::println!("[IID] Chunk {}: index={}, value={}, delay_ms={}", 
+                        chunk_idx, index, value, delay_ms);
+                    if self.append_integer_to_delay_as_milliseconds(index, value, delay_ms as i64) {
+                        parsed_count += 1;
+                    } else {
+                        esp_println::println!("[IID]   ✗ Failed to append to queue (queue full?)");
+                    }
+                } else {
+                    esp_println::println!("[IID] Chunk {}: index={}, value={}, delay_ms={} - REJECTED (delay > 36000000ms)", 
+                        chunk_idx, index, value, delay_ms);
                 }
+            } else {
+                esp_println::println!("[IID] Chunk {}: Failed to parse bytes", chunk_idx);
             }
         }
 
-        true
+        (parsed_count > 0, parsed_count)
     }
 
     /// Gets the current time in milliseconds
-    pub fn get_current_time_on_pico_2w(&self) -> u64 {
+    pub fn get_current_time_on_pico_2w(&mut self) -> u64 {
         self.get_local_timestamp_in_milliseconds()
     }
 
-    /// Gets the local timestamp in milliseconds with RTC and timezone offset
-    pub fn get_local_timestamp_in_milliseconds(&self) -> u64 {
-        let adjusted = self.rtc_time_ms as i64 + self.tz_offset_ms;
-        (adjusted.max(0)) as u64
+    /// Gets the local timestamp in milliseconds using elapsed time from start
+    pub fn get_local_timestamp_in_milliseconds(&mut self) -> u64 {
+        // Initialize start_instant on first call
+        if self.start_instant.is_none() {
+            self.start_instant = Some(Instant::now());
+        }
+        
+        // Calculate elapsed time since start
+        if let Some(start) = self.start_instant {
+            start.elapsed().as_millis() as u64
+        } else {
+            0
+        }
     }
 
     /// Appends an integer to the delay queue with a delay in milliseconds

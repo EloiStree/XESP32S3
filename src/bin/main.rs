@@ -63,6 +63,8 @@ use xesp32s3::integer_action_to_led_strip::IntegerActionToLedStrip;
 use xesp32s3::network::{process_udp, udp_led_commands, CONTROLLER};
 use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
+use xesp32s3::commands;
+use xesp32s3::compact_xbox_int_parser;
 
 const BUILD_INFO: &str = concat!(
     env!("XESP32S3_BUILD_DATE"),
@@ -197,6 +199,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(udp_task(stack).unwrap());
     spawner.spawn(uart_forward_task(uart1, uart2).unwrap());
     spawner.spawn(mdns_task(stack).unwrap());
+    spawner.spawn(delayed_integers_task().unwrap());
     spawner.spawn(led_task(peripherals.RMT, peripherals.GPIO48, strip_pin).unwrap());
 
     // Higher I2C frequency (400 kHz) to overcome USB interrupt latency
@@ -644,6 +647,108 @@ async fn uart_forward_task(mut uart1: UartTx<'static, Async>, mut uart2: UartTx<
 }
 
 #[embassy_executor::task]
+async fn delayed_integers_task() {
+    use embassy_time::Instant;
+    
+    rprintln!("[DELAYED_INTEGERS_TASK] Started");
+    let task_start_time = Instant::now();
+    
+    loop {
+        // Poll the delayer with updated current time
+        {
+            let mut delayer = DELAYER.lock().await;
+            
+            // Check the queue length periodically
+            let queue_len = delayer.queue_length();
+            if queue_len > 0 {
+                rprintln!("[DELAYED] Queue has {} items", queue_len);
+                
+                let ready = delayer.check_for_integer_to_execute();
+                if !ready.is_empty() {
+                    rprintln!("[DELAYED] Found {} ready commands", ready.len());
+                    for delayed_value in ready {
+                        rprintln!("[DELAYED] ✓ Ready: index={}, value={}", delayed_value.m_index, delayed_value.m_integer);
+                        if let Err(e) = DELAYED_INTEGERS.try_send((delayed_value.m_index, delayed_value.m_integer)) {
+                            rprintln!("[DELAYED] ✗ Failed to send to channel: {:?}", e);
+                        } else {
+                            rprintln!("[DELAYED] ✓ Sent to channel: index={}, value={}", delayed_value.m_index, delayed_value.m_integer);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Process any pending delayed integers from the channel
+        // Use a short timeout to avoid blocking other tasks
+        match embassy_time::with_timeout(
+            Duration::from_millis(10),
+            DELAYED_INTEGERS.receive()
+        ).await {
+            Ok((index, value)) => {
+                rprintln!("[DELAYED] Received from channel: index={}, value={}", index, value);
+                
+                // Apply the delayed integer to the Xbox controller
+                let mut state = CONTROLLER.lock().await;
+                
+                // Capture state before for verification
+                let buttons_before = state.buttons;
+                let dpad_before = state.dpad;
+                let left_x_before = state.left_x;
+                let right_trigger_before = state.right_trigger;
+                
+                // Convert the delayed value to a command and execute it
+                let executed = if let Ok(command) = u16::try_from(value) {
+                    rprintln!("[DELAYED] Trying u16 command: {}", command);
+                    if commands::execute(&mut state, command) {
+                        rprintln!("[DELAYED] ✓ Applied Xbox command (u16): value={}", value);
+                        true
+                    } else {
+                        rprintln!("[DELAYED] Fallback to compact parser for: {}", value);
+                        compact_xbox_int_parser::execute(&mut state, value);
+                        rprintln!("[DELAYED] ✓ Applied via compact parser: value={}", value);
+                        true
+                    }
+                } else {
+                    rprintln!("[DELAYED] Value too large for u16 ({}), using compact parser", value);
+                    compact_xbox_int_parser::execute(&mut state, value);
+                    rprintln!("[DELAYED] ✓ Applied via compact parser: value={}", value);
+                    true
+                };
+                
+                // Verify state changed
+                if executed {
+                    let buttons_after = state.buttons;
+                    let dpad_after = state.dpad;
+                    let left_x_after = state.left_x;
+                    let right_trigger_after = state.right_trigger;
+                    
+                    if buttons_before != buttons_after {
+                        rprintln!("[DELAYED] ✓ Buttons changed: {:#010x} → {:#010x}", buttons_before, buttons_after);
+                    } else if core::mem::discriminant(&dpad_before) != core::mem::discriminant(&dpad_after) {
+                        rprintln!("[DELAYED] ✓ DPad changed: {:?} → {:?}", dpad_before, dpad_after);
+                    } else if (left_x_before - left_x_after).abs() > 0.01 {
+                        rprintln!("[DELAYED] ✓ Left X changed: {} → {}", left_x_before, left_x_after);
+                    } else if (right_trigger_before - right_trigger_after).abs() > 0.01 {
+                        rprintln!("[DELAYED] ✓ Right trigger changed: {} → {}", right_trigger_before, right_trigger_after);
+                    } else {
+                        rprintln!("[DELAYED] ⚠ State unchanged (command may have failed or been a no-op)");
+                    }
+                }
+            }
+            Err(_timeout) => {
+                // No pending delayed integer, just continue checking
+                if task_start_time.elapsed().as_secs() > 30 {
+                    rprintln!("[DELAYED] Task alive ({}s), waiting for commands...", task_start_time.elapsed().as_secs());
+                }
+            }
+        }
+        
+        // Small delay to avoid busy-waiting
+        Timer::after(Duration::from_millis(1)).await;
+    }
+}
+
+#[embassy_executor::task]
 async fn udp_task(stack: Stack<'static>) {
     let mut rx_meta = [PacketMetadata::EMPTY; 8];
     let mut rx_buffer = [0u8; 8192];
@@ -669,16 +774,19 @@ async fn udp_task(stack: Stack<'static>) {
         };
         let packet = &buf[..len];
         
+        // Debug: Show what we received
+        rprintln!("[UDP] ✓ Packet received: {} bytes", len);
+        
         // Check if UDP payload is divisible by 16 and process as delayed integers
         {
             let mut delayer = DELAYER.lock().await;
-            if delayer.append_value_if_dividable_by_16_and_not_1024(packet) {
-                rprintln!("IID format packet received and queued");
-                // Check for any delayed integers ready to execute
-                for delayed_value in delayer.check_for_integer_to_execute() {
-                    rprintln!("Executing delayed integer: index={}, value={}", delayed_value.m_index, delayed_value.m_integer);
-                    DELAYED_INTEGERS.send((delayed_value.m_index, delayed_value.m_integer)).await;
-                }
+            let (is_iid_format, parsed_count) = delayer.append_value_if_dividable_by_16_and_not_1024(packet);
+            
+            if is_iid_format {
+                rprintln!("[UDP] ✓ IID format packet received and queued ({} items, {} total pending)", 
+                    parsed_count, delayer.queue_length());
+            } else {
+                rprintln!("[UDP] ✗ Not IID format - will process as regular packet");
             }
         }
         
