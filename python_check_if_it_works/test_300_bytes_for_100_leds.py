@@ -37,13 +37,17 @@ array_of_bytes = b"".join([
 ])
 
 
+
+time_between_step = 0.1
+number_of_steps = 10
+
 # Send UDP packet to the target IP and port.
 while True:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.sendto(array_of_bytes, (target_ip, port))
         #print(f"Sending packet to {target_ip}:{port} size {len(array_of_bytes)}")
-    for i in range(2):
+    for i in range(number_of_steps):
         array_of_bytes = array_of_bytes[3:] + array_of_bytes[:3]
-    time.sleep(0.005)
+    time.sleep(time_between_step)
     
 
