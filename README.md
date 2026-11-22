@@ -46,3 +46,22 @@ Make your project even more fun by adding a camera.
 
 **XIAO ESP32-S3 Sense**  
 https://www.amazon.com.be/-/en/dp/B0C69FFVHH
+
+
+
+# Instructions
+
+Create a Wi-Fi hotspot named `uart.local` with the password `12345678`.
+
+You can change these settings by editing `config.rs` before flashing the firmware.
+
+Connect to the hotspot and send text or bytes through port `3615`.
+
+The incoming data is interpreted as follows:
+
+- **1024-byte array:** Sent to the SSD1306 screen.
+- **300-byte array:** Sent to the LED strip.
+- **Byte arrays divisible by 16:** Interpreted as blocks of timed instructions to be executed by the hardware.
+- **Other data:** Forwarded to the device's UART pins and translated to check whether an Xbox 360 (X360) action is requested.
+
+More details will be available in an upcoming tutorial.
