@@ -21,9 +21,7 @@ https://www.amazon.com.be/s?k=ssd1306
 https://www.amazon.com.be/dp/B0D5B7HDPP   
 
 **USB Power Supply for the LED Strip**   
-   
 You will need a USB power supply to power the LED strip connected to the Freenove board.  
-   
 https://www.amazon.com.be/dp/B0DNYGKXH5   
 
 **Level Shifter**    
