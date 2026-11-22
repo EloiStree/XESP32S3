@@ -36,3 +36,4 @@ while True:
         s.sendto(array_of_bytes, (target_ip, port))
         print(f"Sending packet to {target_ip}:{port} size {len(array_of_bytes)}")
     time.sleep(2)
+
