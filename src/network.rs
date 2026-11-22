@@ -5,6 +5,7 @@ use crate::commands::execute;
 use crate::compact_xbox_int_parser;
 use crate::controller::{ControllerState, Direction};
 use crate::integer_action_to_led_strip::{is_led_command, RGB_PACKET_BYTES};
+use crate::screen::SCREEN_FRAME_BYTES;
 
 pub static CONTROLLER: Mutex<CriticalSectionRawMutex, ControllerState> =
     Mutex::new(ControllerState {
@@ -56,7 +57,7 @@ pub fn udp_rgb_packet(packet: &[u8]) -> Option<&[u8; RGB_PACKET_BYTES]> {
 
 /// Whether a UDP datagram should be forwarded to the UART outputs.
 pub fn should_forward_udp(packet: &[u8]) -> bool {
-    packet.len() != RGB_PACKET_BYTES && packet.len() != 1024
+    packet.len() != RGB_PACKET_BYTES && packet.len() != SCREEN_FRAME_BYTES
 }
 
 #[cfg(test)]

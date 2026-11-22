@@ -14,6 +14,7 @@ use embassy_futures::join::{join, join3};
 use embassy_futures::select::{select, Either};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
+use embassy_sync::signal::Signal;
 use embedded_io_async::Write as AsyncWrite;
 use embedded_graphics::mono_font::ascii::{FONT_4X6, FONT_6X10};
 use embedded_graphics::mono_font::MonoTextStyle;
@@ -62,6 +63,7 @@ use xesp32s3::config::{
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
 use xesp32s3::integer_action_to_led_strip::{encode_strip_frame, is_led_command, latest_rgb_packet, IntegerActionToLedStrip, LedUpdate, STRIP_FRAME_BYTES};
 use xesp32s3::network::{process_udp, should_forward_udp, udp_led_commands, udp_rgb_packet, CONTROLLER};
+use xesp32s3::screen::{screen_pixels, udp_screen_packet, SCREEN_FRAME_BYTES};
 use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
 use xesp32s3::commands;
@@ -77,6 +79,7 @@ const MAX_UDP_PAYLOAD: usize = 1472;
 type ForwardPacket = heapless::Vec<u8, MAX_UDP_PAYLOAD>;
 static UART_PACKETS: Channel<CriticalSectionRawMutex, ForwardPacket, 4> = Channel::new();
 static LED_COMMANDS: Channel<CriticalSectionRawMutex, LedUpdate, 32> = Channel::new();
+static SCREEN_FRAME: Signal<CriticalSectionRawMutex, [u8; SCREEN_FRAME_BYTES]> = Signal::new();
 
 static DELAYER: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, IndexValueIntegerTimeMillisecondsDelayer> =
     embassy_sync::mutex::Mutex::new(IndexValueIntegerTimeMillisecondsDelayer::new(0.0, 0.0));
@@ -556,72 +559,90 @@ async fn display_task(i2c: I2c<'static, Blocking>, stack: Stack<'static>) {
     let network_style = MonoTextStyle::new(&FONT_4X6, BinaryColor::On);
     let mut info = DebugInfo::default();
     let mut wifi_status = WifiStatus::WaitingForHotspot;
+    let mut showing_frame = false;
 
     loop {
-        display.clear_buffer();
-        match wifi_status {
-            WifiStatus::WaitingForHotspot => {
-                let mut draw = |y: i32, text: &str| {
-                    let _ = Text::with_baseline(text, Point::new(0, y), style, Baseline::Top)
-                        .draw(&mut display);
-                };
-                draw(0, "Wi-Fi not connected");
-                draw(11, "Create a hotspot:");
+        if !showing_frame {
+            display.clear_buffer();
+            match wifi_status {
+                WifiStatus::WaitingForHotspot => {
+                    let mut draw = |y: i32, text: &str| {
+                        let _ = Text::with_baseline(text, Point::new(0, y), style, Baseline::Top)
+                            .draw(&mut display);
+                    };
+                    draw(0, "Wi-Fi not connected");
+                    draw(11, "Create a hotspot:");
 
-                let mut ssid = heapless::String::<40>::new();
-                let _ = write!(ssid, "SSID: {}", WIFI_SSID);
-                draw(22, &ssid);
+                    let mut ssid = heapless::String::<40>::new();
+                    let _ = write!(ssid, "SSID: {}", WIFI_SSID);
+                    draw(22, &ssid);
 
-                let mut password = heapless::String::<40>::new();
-                let _ = write!(password, "Password: {}", WIFI_PASSWORD);
-                draw(33, &password);
+                    let mut password = heapless::String::<40>::new();
+                    let _ = write!(password, "Password: {}", WIFI_PASSWORD);
+                    draw(33, &password);
 
-                draw(44, "Waiting for Wi-Fi...");
-                draw(54, BUILD_INFO);
+                    draw(44, "Waiting for Wi-Fi...");
+                    draw(54, BUILD_INFO);
+                }
+                WifiStatus::Connected => {
+                    let mut network = heapless::String::<48>::new();
+                    let _ = write!(
+                        network,
+                        "W:{} M:{}.local:{}",
+                        WIFI_SSID, MDNS_HOST, UDP_PORT
+                    );
+                    let _ = Text::with_baseline(
+                        &network,
+                        Point::new(0, 0),
+                        network_style,
+                        Baseline::Top,
+                    )
+                    .draw(&mut display);
+                    let mut draw = |y: i32, text: &str| {
+                        let _ = Text::with_baseline(text, Point::new(0, y), style, Baseline::Top)
+                            .draw(&mut display);
+                    };
+                    let mut ip = heapless::String::<24>::new();
+                    if let Some(config) = stack.config_v4() {
+                        let _ = write!(ip, "IP: {}", config.address.address());
+                    } else {
+                        let _ = ip.push_str("IP: waiting...");
+                    }
+                    draw(11, &ip);
+                    if DISPLAY_DEBUG_INFO {
+                        draw(22, &info.state);
+                        draw(33, &info.axes);
+                    }
+                    draw(54, BUILD_INFO);
+                }
             }
-            WifiStatus::Connected => {
-                let mut network = heapless::String::<48>::new();
-                let _ = write!(
-                    network,
-                    "W:{} M:{}.local:{}",
-                    WIFI_SSID, MDNS_HOST, UDP_PORT
-                );
-                let _ = Text::with_baseline(
-                    &network,
-                    Point::new(0, 0),
-                    network_style,
-                    Baseline::Top,
-                )
-                .draw(&mut display);
-                let mut draw = |y: i32, text: &str| {
-                    let _ = Text::with_baseline(text, Point::new(0, y), style, Baseline::Top)
-                        .draw(&mut display);
-                };
-                let mut ip = heapless::String::<24>::new();
-                if let Some(config) = stack.config_v4() {
-                    let _ = write!(ip, "IP: {}", config.address.address());
-                } else {
-                    let _ = ip.push_str("IP: waiting...");
-                }
-                draw(11, &ip);
-                if DISPLAY_DEBUG_INFO {
-                    draw(22, &info.state);
-                    draw(33, &info.axes);
-                }
-                draw(54, BUILD_INFO);
+            if let Err(error) = display.flush() {
+                rprintln!("SSD1306 status update failed: {:?}", error);
             }
         }
-        let _ = display.flush();
 
         match select(
-            select(DEBUG.wait(), WIFI_STATUS.wait()),
-            Timer::after(Duration::from_secs(1)),
+            SCREEN_FRAME.wait(),
+            select(
+                select(DEBUG.wait(), WIFI_STATUS.wait()),
+                Timer::after(Duration::from_secs(1)),
+            ),
         )
         .await
         {
-            Either::First(Either::First(updated_info)) => info = updated_info,
-            Either::First(Either::Second(updated_status)) => wifi_status = updated_status,
-            Either::Second(()) => {}
+            Either::First(frame) => {
+                showing_frame = true;
+                display.clear_buffer();
+                for (x, y, on) in screen_pixels(&frame) {
+                    display.set_pixel(x, y, on);
+                }
+                if let Err(error) = display.flush() {
+                    rprintln!("SSD1306 frame update failed: {:?}", error);
+                }
+            }
+            Either::Second(Either::First(Either::First(updated_info))) => info = updated_info,
+            Either::Second(Either::First(Either::Second(updated_status))) => wifi_status = updated_status,
+            Either::Second(Either::Second(())) => {}
         }
     }
 }
@@ -747,6 +768,10 @@ async fn udp_task(stack: Stack<'static>) {
         let packet = &buf[..len];
         
         rprintln!("[UDP] ✓ Packet received: {} bytes", len);
+
+        if let Some(frame) = udp_screen_packet(packet) {
+            SCREEN_FRAME.signal(*frame);
+        }
 
         if let Some(rgb) = udp_rgb_packet(packet) {
             LED_COMMANDS.send(LedUpdate::Rgb(*rgb)).await;

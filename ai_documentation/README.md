@@ -78,6 +78,12 @@ unfragmented UDP payloads up to 1472 bytes; IPv4 fragmentation is not supported.
 UART throughput is limited, so sustained traffic or bursts can cause packets to be
 dropped; a full forwarding queue is reported in the serial log.
 
+A UDP datagram of exactly 1024 bytes also updates the 128x64 SSD1306 screen.
+Send eight pages of 128 bytes, from top to bottom; each byte describes a vertical
+column of eight pixels, with bit 0 at the top and 1 meaning lit. The most recent
+frame stays on screen until another frame arrives or the device restarts. Pending
+frames may be replaced by newer frames if they arrive faster than the display can update.
+
 A UDP datagram of exactly 300 bytes updates the entire strip: three bytes per LED,
 in red, green, blue order, for LEDs 0 through 99. Each channel accepts 0-255.
 For shorter configured strips, only the first `STRIP_LED_COUNT` triplets are used.

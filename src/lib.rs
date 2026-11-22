@@ -9,4 +9,5 @@ pub mod integer_action_to_led_strip;
 pub mod integer_delayer;
 pub mod mdns;
 pub mod network;
+pub mod screen;
 pub mod xinput;

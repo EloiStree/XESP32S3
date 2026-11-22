@@ -38,8 +38,8 @@ array_of_bytes = b"".join([
 
 
 
-time_between_step = 0.1
-number_of_steps = 10
+time_between_step = 0.01
+number_of_steps = 1
 
 # Send UDP packet to the target IP and port.
 while True:
