@@ -35,10 +35,11 @@ use embassy_usb::control::{InResponse, OutResponse, Request, RequestType};
 use embassy_usb::types::StringIndex;
 use embassy_usb::{Builder, Config as UsbConfig};
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{AnyPin, Level, Pin};
-use esp_hal::peripherals::{GPIO48, RMT};
-use esp_hal::rmt::{PulseCode, Rmt, TxChannelConfig, TxChannelCreator};
+use esp_hal::gpio::{AnyPin, Pin};
+use esp_hal::peripherals::{DMA_CH0, GPIO48, RMT, SPI2};
+use esp_hal::rmt::Rmt;
 use esp_hal::rng::Rng;
+use esp_hal::spi::master::{Config as SpiConfig, Spi};
 use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Config as UartConfig, UartTx};
@@ -50,7 +51,7 @@ use esp_radio::wifi::{
     AuthenticationMethodConfig, Config as WifiConfig, Interface, Password, Ssid, WifiController,
 };
 use esp_println::println as rprintln;
-use esp_hal_smartled::{RmtSmartLeds, WS2812_TIMING, WS2812B_TIMING, buffer_size, color_order};
+use esp_hal_smartled::{RmtSmartLeds, WS2812_TIMING, buffer_size, color_order};
 use qrcodegen_no_heap::{QrCode, QrCodeEcc, Version};
 use smart_leds_trait::{RGB8, SmartLedsWriteAsync};
 use static_cell::StaticCell;
@@ -59,7 +60,7 @@ use xesp32s3::config::{
     UART1_TX_GPIO, UART2_TX_GPIO, UART_BAUD_RATE, UDP_PORT, WIFI_PASSWORD, WIFI_SSID,
 };
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
-use xesp32s3::integer_action_to_led_strip::IntegerActionToLedStrip;
+use xesp32s3::integer_action_to_led_strip::{encode_strip_frame, is_led_command, IntegerActionToLedStrip, STRIP_FRAME_BYTES};
 use xesp32s3::network::{process_udp, udp_led_commands, CONTROLLER};
 use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
@@ -76,7 +77,6 @@ const MAX_UDP_PAYLOAD: usize = 1472;
 type ForwardPacket = heapless::Vec<u8, MAX_UDP_PAYLOAD>;
 static UART_PACKETS: Channel<CriticalSectionRawMutex, ForwardPacket, 4> = Channel::new();
 static LED_COMMANDS: Channel<CriticalSectionRawMutex, u32, 32> = Channel::new();
-static DELAYED_INTEGERS: Channel<CriticalSectionRawMutex, (u32, u32), 64> = Channel::new();
 
 static DELAYER: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, IndexValueIntegerTimeMillisecondsDelayer> =
     embassy_sync::mutex::Mutex::new(IndexValueIntegerTimeMillisecondsDelayer::new(0.0, 0.0));
@@ -200,7 +200,7 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(uart_forward_task(uart1, uart2).unwrap());
     spawner.spawn(mdns_task(stack).unwrap());
     spawner.spawn(delayed_integers_task().unwrap());
-    spawner.spawn(led_task(peripherals.RMT, peripherals.GPIO48, strip_pin).unwrap());
+    spawner.spawn(led_task(peripherals.RMT, peripherals.GPIO48, peripherals.SPI2, peripherals.DMA_CH0, strip_pin).unwrap());
 
     // Higher I2C frequency (400 kHz) to overcome USB interrupt latency
     let i2c = I2c::new(
@@ -336,6 +336,8 @@ fn take_configured_pin(pins: &mut [Option<AnyPin<'static>>], gpio: u8) -> AnyPin
 async fn led_task(
     rmt_peripheral: RMT<'static>,
     led_pin: GPIO48<'static>,
+    spi_peripheral: SPI2<'static>,
+    dma_channel: DMA_CH0<'static>,
     strip_pin: AnyPin<'static>,
 ) {
     let frequency = Rate::from_mhz(80);
@@ -349,32 +351,23 @@ async fn led_task(
         frequency,
     )
     .expect("RGB LED configuration failed");
-    let mut strip = rmt
-        .channel1
-        .configure_tx(
-            &TxChannelConfig::default()
-                .with_clk_divider(1)
-                .with_idle_output_level(Level::Low)
-                .with_memsize(3)
-                .with_carrier_modulation(false)
-                .with_idle_output(true),
-        )
-        .expect("RGB strip configuration failed")
-        .with_pin(strip_pin);
-    let (zero, one, reset) =
-        RmtSmartLeds::<{ buffer_size::<RGB8>(1) }, Async, RGB8, color_order::Grb>::get_timings_for(
-            &WS2812B_TIMING,
-            frequency,
-        )
-        .expect("RGB strip timing invalid");
+    let rx_buffer = esp_hal::dma_rx_buffer!(4).expect("RGB strip RX DMA buffer failed");
+    let tx_buffer = esp_hal::dma_tx_buffer!(STRIP_FRAME_BYTES).expect("RGB strip TX DMA buffer failed");
+    let mut strip = Spi::new(
+        spi_peripheral,
+        SpiConfig::default().with_frequency(Rate::from_khz(2500)),
+    )
+    .expect("RGB strip SPI configuration failed")
+    .with_mosi(strip_pin)
+    .with_dma(dma_channel)
+    .with_buffers(rx_buffer, tx_buffer)
+    .into_async();
     let startup_color = random_strip_color(&Rng::new());
     let mut strip_state = IntegerActionToLedStrip::new(startup_color);
-    let mut strip_pulses =
-        alloc::vec![PulseCode::end_marker(); buffer_size::<RGB8>(STRIP_LED_COUNT)];
-    strip_pulses[STRIP_LED_COUNT * 24] = reset;
-    encode_strip_colors(strip_state.state(), &mut strip_pulses, zero, one);
+    let mut strip_frame = [0; STRIP_FRAME_BYTES];
+    encode_strip_frame(strip_state.state(), &mut strip_frame);
     strip
-        .transmit(&mut strip_pulses)
+        .write_async(&strip_frame)
         .await
         .expect("RGB strip startup update failed");
 
@@ -396,9 +389,9 @@ async fn led_task(
             }
             Either::Second(command) => match strip_state.handle_integer(command) {
                 Ok(true) => {
-                    encode_strip_colors(strip_state.state(), &mut strip_pulses, zero, one);
+                    encode_strip_frame(strip_state.state(), &mut strip_frame);
                     strip
-                        .transmit(&mut strip_pulses)
+                        .write_async(&strip_frame)
                         .await
                         .expect("RGB strip update failed");
                 }
@@ -408,19 +401,6 @@ async fn led_task(
                     command, index, STRIP_LED_COUNT
                 ),
             },
-        }
-    }
-}
-
-fn encode_strip_colors(colors: &[RGB8], pulses: &mut [PulseCode], zero: PulseCode, one: PulseCode) {
-    for (strip_color, pulses) in colors.iter().zip(pulses.chunks_exact_mut(24)) {
-        for (byte, byte_pulses) in [strip_color.g, strip_color.r, strip_color.b]
-            .into_iter()
-            .zip(pulses.chunks_exact_mut(8))
-        {
-            for (bit, pulse) in byte_pulses.iter_mut().enumerate() {
-                *pulse = if byte & (0x80 >> bit) != 0 { one } else { zero };
-            }
         }
     }
 }
@@ -648,103 +628,76 @@ async fn uart_forward_task(mut uart1: UartTx<'static, Async>, mut uart2: UartTx<
 
 #[embassy_executor::task]
 async fn delayed_integers_task() {
-    use embassy_time::Instant;
-    
     rprintln!("[DELAYED_INTEGERS_TASK] Started");
-    let task_start_time = Instant::now();
-    
-    loop {
-        // Poll the delayer with updated current time
-        {
-            let mut delayer = DELAYER.lock().await;
-            
-            // Check the queue length periodically
-            let queue_len = delayer.queue_length();
-            if queue_len > 0 {
-                rprintln!("[DELAYED] Queue has {} items", queue_len);
-                
-                let ready = delayer.check_for_integer_to_execute();
-                if !ready.is_empty() {
-                    rprintln!("[DELAYED] Found {} ready commands", ready.len());
-                    for delayed_value in ready {
-                        rprintln!("[DELAYED] ✓ Ready: index={}, value={}", delayed_value.m_index, delayed_value.m_integer);
-                        if let Err(e) = DELAYED_INTEGERS.try_send((delayed_value.m_index, delayed_value.m_integer)) {
-                            rprintln!("[DELAYED] ✗ Failed to send to channel: {:?}", e);
-                        } else {
-                            rprintln!("[DELAYED] ✓ Sent to channel: index={}, value={}", delayed_value.m_index, delayed_value.m_integer);
-                        }
-                    }
-                }
-            }
-        }
 
-        // Process any pending delayed integers from the channel
-        // Use a short timeout to avoid blocking other tasks
-        match embassy_time::with_timeout(
-            Duration::from_millis(10),
-            DELAYED_INTEGERS.receive()
-        ).await {
-            Ok((index, value)) => {
-                rprintln!("[DELAYED] Received from channel: index={}, value={}", index, value);
-                
-                // Apply the delayed integer to the Xbox controller
-                let mut state = CONTROLLER.lock().await;
-                
-                // Capture state before for verification
-                let buttons_before = state.buttons;
-                let dpad_before = state.dpad;
-                let left_x_before = state.left_x;
-                let right_trigger_before = state.right_trigger;
-                
-                // Convert the delayed value to a command and execute it
-                let executed = if let Ok(command) = u16::try_from(value) {
-                    rprintln!("[DELAYED] Trying u16 command: {}", command);
-                    if commands::execute(&mut state, command) {
-                        rprintln!("[DELAYED] ✓ Applied Xbox command (u16): value={}", value);
-                        true
-                    } else {
-                        rprintln!("[DELAYED] Fallback to compact parser for: {}", value);
-                        compact_xbox_int_parser::execute(&mut state, value);
-                        rprintln!("[DELAYED] ✓ Applied via compact parser: value={}", value);
-                        true
-                    }
+    loop {
+        let ready = {
+            let mut delayer = DELAYER.lock().await;
+            delayer.check_for_integer_to_execute()
+        };
+        let delay_ms = if ready.is_empty() { 10 } else { 1 };
+
+        for delayed_value in ready {
+            let index = delayed_value.m_index;
+            let value = delayed_value.m_integer;
+            rprintln!("[DELAYED] Ready: index={}, value={}", index, value);
+
+            if is_led_command(value) {
+                LED_COMMANDS.send(value).await;
+                continue;
+            }
+
+            // Apply the delayed integer to the Xbox controller
+            let mut state = CONTROLLER.lock().await;
+
+            // Capture state before for verification
+            let buttons_before = state.buttons;
+            let dpad_before = state.dpad;
+            let left_x_before = state.left_x;
+            let right_trigger_before = state.right_trigger;
+
+            // Convert the delayed value to a command and execute it
+            let executed = if let Ok(command) = u16::try_from(value) {
+                rprintln!("[DELAYED] Trying u16 command: {}", command);
+                if commands::execute(&mut state, command) {
+                    rprintln!("[DELAYED] ✓ Applied Xbox command (u16): value={}", value);
+                    true
                 } else {
-                    rprintln!("[DELAYED] Value too large for u16 ({}), using compact parser", value);
+                    rprintln!("[DELAYED] Fallback to compact parser for: {}", value);
                     compact_xbox_int_parser::execute(&mut state, value);
                     rprintln!("[DELAYED] ✓ Applied via compact parser: value={}", value);
                     true
-                };
-                
-                // Verify state changed
-                if executed {
-                    let buttons_after = state.buttons;
-                    let dpad_after = state.dpad;
-                    let left_x_after = state.left_x;
-                    let right_trigger_after = state.right_trigger;
-                    
-                    if buttons_before != buttons_after {
-                        rprintln!("[DELAYED] ✓ Buttons changed: {:#010x} → {:#010x}", buttons_before, buttons_after);
-                    } else if core::mem::discriminant(&dpad_before) != core::mem::discriminant(&dpad_after) {
-                        rprintln!("[DELAYED] ✓ DPad changed: {:?} → {:?}", dpad_before, dpad_after);
-                    } else if (left_x_before - left_x_after).abs() > 0.01 {
-                        rprintln!("[DELAYED] ✓ Left X changed: {} → {}", left_x_before, left_x_after);
-                    } else if (right_trigger_before - right_trigger_after).abs() > 0.01 {
-                        rprintln!("[DELAYED] ✓ Right trigger changed: {} → {}", right_trigger_before, right_trigger_after);
-                    } else {
-                        rprintln!("[DELAYED] ⚠ State unchanged (command may have failed or been a no-op)");
-                    }
                 }
-            }
-            Err(_timeout) => {
-                // No pending delayed integer, just continue checking
-                if task_start_time.elapsed().as_secs() > 30 {
-                    rprintln!("[DELAYED] Task alive ({}s), waiting for commands...", task_start_time.elapsed().as_secs());
+            } else {
+                rprintln!("[DELAYED] Value too large for u16 ({}), using compact parser", value);
+                compact_xbox_int_parser::execute(&mut state, value);
+                rprintln!("[DELAYED] ✓ Applied via compact parser: value={}", value);
+                true
+            };
+
+            // Verify state changed
+            if executed {
+                let buttons_after = state.buttons;
+                let dpad_after = state.dpad;
+                let left_x_after = state.left_x;
+                let right_trigger_after = state.right_trigger;
+
+                if buttons_before != buttons_after {
+                    rprintln!("[DELAYED] ✓ Buttons changed: {:#010x} → {:#010x}", buttons_before, buttons_after);
+                } else if core::mem::discriminant(&dpad_before) != core::mem::discriminant(&dpad_after) {
+                    rprintln!("[DELAYED] ✓ DPad changed: {:?} → {:?}", dpad_before, dpad_after);
+                } else if (left_x_before - left_x_after).abs() > 0.01 {
+                    rprintln!("[DELAYED] ✓ Left X changed: {} → {}", left_x_before, left_x_after);
+                } else if (right_trigger_before - right_trigger_after).abs() > 0.01 {
+                    rprintln!("[DELAYED] ✓ Right trigger changed: {} → {}", right_trigger_before, right_trigger_after);
+                } else {
+                    rprintln!("[DELAYED] ⚠ State unchanged (command may have failed or been a no-op)");
                 }
             }
         }
         
         // Small delay to avoid busy-waiting
-        Timer::after(Duration::from_millis(1)).await;
+        Timer::after(Duration::from_millis(delay_ms)).await;
     }
 }
 

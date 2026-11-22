@@ -44,8 +44,9 @@ The built-in WS2812 RGB LED on GPIO48 changes to a random, low-brightness color 
 At startup, every LED on the WS2812B strip on GPIO14 is set to the same randomly
 chosen full-intensity blue, red, green, yellow, cyan, or purple. Set
 `STRIP_LED_COUNT` in [`src/config.rs`](src/config.rs) to the number of LEDs on the
-strip (100 by default). UDP LED commands can change individual LEDs without
-changing the onboard LED.
+strip (1-100, 100 by default). UDP LED commands can change individual LEDs without
+changing the onboard LED. The strip uses SPI2 and DMA channel 0 for uninterrupted
+transmission; the onboard LED continues to use RMT.
 Connect GPIO14 to the strip's data input (DIN), use a suitable 5 V power supply, and
 connect the strip and ESP32 grounds together. A 3.3 V-to-5 V logic level shifter is
 recommended for reliable data. Check the strip's labels and data-direction arrows
@@ -79,10 +80,14 @@ dropped; a full forwarding queue is reported in the serial log.
 
 UDP integers from `200000000` through `299999999` update the strip using
 `02AARRGGBB`: `AA` is the LED index (00-99), and `RR`, `GG`, `BB` are raw
-red, green, and blue values (00-99). For example, `201990099` sets LED 1
-to RGB (99, 0, 99). Indices outside `STRIP_LED_COUNT` are logged and ignored.
+red, green, and blue values (00-99). Indices are zero-based, so `214009900`
+sets the 15th LED (index 14) to RGB (0, 99, 0), and `299990000` sets the
+100th LED to RGB (99, 0, 0). Indices outside `STRIP_LED_COUNT` are logged and ignored.
 Commands can be separated by whitespace, commas, or semicolons and mixed with
-controller commands.
+controller commands. LED commands also work as values in delayed IID packets:
+each 16-byte entry contains a little-endian 32-bit index, 32-bit command value,
+and 64-bit delay in milliseconds. The command value contains the LED index;
+the IID index does not select the LED.
 
 # How to install 
 

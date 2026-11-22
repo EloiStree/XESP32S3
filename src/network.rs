@@ -4,7 +4,7 @@ use embassy_sync::mutex::Mutex;
 use crate::commands::execute;
 use crate::compact_xbox_int_parser;
 use crate::controller::{ControllerState, Direction};
-use crate::integer_action_to_led_strip::{LED_COMMAND_END, LED_COMMAND_START};
+use crate::integer_action_to_led_strip::is_led_command;
 
 pub static CONTROLLER: Mutex<CriticalSectionRawMutex, ControllerState> =
     Mutex::new(ControllerState {
@@ -46,7 +46,7 @@ pub fn udp_integers(packet: &[u8]) -> impl Iterator<Item = u32> + '_ {
 
 /// Returns LED commands in the order they appear in a UDP payload.
 pub fn udp_led_commands(packet: &[u8]) -> impl Iterator<Item = u32> + '_ {
-    udp_integers(packet).filter(|value| (LED_COMMAND_START..=LED_COMMAND_END).contains(value))
+    udp_integers(packet).filter(|&value| is_led_command(value))
 }
 
 #[cfg(test)]

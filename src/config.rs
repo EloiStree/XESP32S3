@@ -37,6 +37,7 @@ const fn valid_configurable_gpio(pin: u8) -> bool {
 }
 
 const _: () = {
+    assert!(STRIP_LED_COUNT > 0 && STRIP_LED_COUNT <= 100, "strip LED count must be 1..=100");
     let pins = [
         STRIP_GPIO,
         UART1_TX_GPIO,
