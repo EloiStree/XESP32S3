@@ -71,12 +71,20 @@ Check your board's peripherals before choosing a pin. GPIO3, GPIO45 and GPIO46 a
 strapping pins and require special care at reset.
 
 UDP datagrams are also forwarded unchanged to UART1 TX on GPIO4 and UART2 TX on GPIO5
-(9600 baud, 8-N-1 by default). Connect the receiving devices' grounds to the ESP32's
-ground and use 3.3 V-compatible UART inputs. Datagrams of exactly 1024 bytes are not
-forwarded, but their controller and LED commands are still processed. The forwarding path accepts
+(9600 baud, 8-N-1 by default), except for 300-byte LED packets and 1024-byte packets.
+Connect the receiving devices' grounds to the ESP32's ground and use 3.3 V-compatible UART inputs.
+Controller and LED commands in 1024-byte datagrams are still processed. The forwarding path accepts
 unfragmented UDP payloads up to 1472 bytes; IPv4 fragmentation is not supported.
 UART throughput is limited, so sustained traffic or bursts can cause packets to be
 dropped; a full forwarding queue is reported in the serial log.
+
+A UDP datagram of exactly 300 bytes updates the entire strip: three bytes per LED,
+in red, green, blue order, for LEDs 0 through 99. Each channel accepts 0-255.
+For shorter configured strips, only the first `STRIP_LED_COUNT` triplets are used.
+These packets are not forwarded to the UART outputs or interpreted as controller
+or integer LED commands. When multiple RGB frames are waiting, older consecutive
+frames are skipped so the strip shows the newest frame sooner; integer LED
+commands retain their order relative to frames.
 
 UDP integers from `200000000` through `299999999` update the strip using
 `02AARRGGBB`: `AA` is the LED index (00-99), and `RR`, `GG`, `BB` are raw

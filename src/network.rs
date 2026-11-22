@@ -4,7 +4,7 @@ use embassy_sync::mutex::Mutex;
 use crate::commands::execute;
 use crate::compact_xbox_int_parser;
 use crate::controller::{ControllerState, Direction};
-use crate::integer_action_to_led_strip::is_led_command;
+use crate::integer_action_to_led_strip::{is_led_command, RGB_PACKET_BYTES};
 
 pub static CONTROLLER: Mutex<CriticalSectionRawMutex, ControllerState> =
     Mutex::new(ControllerState {
@@ -49,6 +49,16 @@ pub fn udp_led_commands(packet: &[u8]) -> impl Iterator<Item = u32> + '_ {
     udp_integers(packet).filter(|&value| is_led_command(value))
 }
 
+/// Identifies a complete 100-LED RGB packet.
+pub fn udp_rgb_packet(packet: &[u8]) -> Option<&[u8; RGB_PACKET_BYTES]> {
+    packet.try_into().ok()
+}
+
+/// Whether a UDP datagram should be forwarded to the UART outputs.
+pub fn should_forward_udp(packet: &[u8]) -> bool {
+    packet.len() != RGB_PACKET_BYTES && packet.len() != 1024
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +73,22 @@ mod tests {
             udp_integers(packet).eq([1300, 200_990_099, 201_990_099, 1_800_000_000])
         );
         assert_eq!(udp_integers(b"\xff 200990099").count(), 0);
+    }
+
+    #[test]
+    fn identifies_only_exactly_300_byte_rgb_packets() {
+        assert!(udp_rgb_packet(&[0; 299]).is_none());
+        assert_eq!(udp_rgb_packet(&[255; 300]), Some(&[255; 300]));
+        assert!(udp_rgb_packet(&[0; 301]).is_none());
+    }
+
+    #[test]
+    fn excludes_rgb_and_screen_packets_from_uart_forwarding() {
+        assert!(!should_forward_udp(&[0; 300]));
+        assert!(!should_forward_udp(&[0; 1024]));
+        assert!(should_forward_udp(&[0; 299]));
+        assert!(should_forward_udp(&[0; 301]));
+        assert!(should_forward_udp(b"1300"));
     }
 
     #[test]

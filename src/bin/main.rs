@@ -60,8 +60,8 @@ use xesp32s3::config::{
     UART1_TX_GPIO, UART2_TX_GPIO, UART_BAUD_RATE, UDP_PORT, WIFI_PASSWORD, WIFI_SSID,
 };
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
-use xesp32s3::integer_action_to_led_strip::{encode_strip_frame, is_led_command, IntegerActionToLedStrip, STRIP_FRAME_BYTES};
-use xesp32s3::network::{process_udp, udp_led_commands, CONTROLLER};
+use xesp32s3::integer_action_to_led_strip::{encode_strip_frame, is_led_command, latest_rgb_packet, IntegerActionToLedStrip, LedUpdate, STRIP_FRAME_BYTES};
+use xesp32s3::network::{process_udp, should_forward_udp, udp_led_commands, udp_rgb_packet, CONTROLLER};
 use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
 use xesp32s3::commands;
@@ -76,7 +76,7 @@ const BUILD_INFO: &str = concat!(
 const MAX_UDP_PAYLOAD: usize = 1472;
 type ForwardPacket = heapless::Vec<u8, MAX_UDP_PAYLOAD>;
 static UART_PACKETS: Channel<CriticalSectionRawMutex, ForwardPacket, 4> = Channel::new();
-static LED_COMMANDS: Channel<CriticalSectionRawMutex, u32, 32> = Channel::new();
+static LED_COMMANDS: Channel<CriticalSectionRawMutex, LedUpdate, 32> = Channel::new();
 
 static DELAYER: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, IndexValueIntegerTimeMillisecondsDelayer> =
     embassy_sync::mutex::Mutex::new(IndexValueIntegerTimeMillisecondsDelayer::new(0.0, 0.0));
@@ -377,30 +377,49 @@ async fn led_task(
         .await
         .expect("RGB LED update failed");
     let mut next_led_update = Instant::now() + Duration::from_secs(1);
+    let mut deferred_update = None;
     loop {
-        match select(Timer::at(next_led_update), LED_COMMANDS.receive()).await {
-            Either::First(()) => {
-                let color = random_led_color(&rng, previous);
-                led.write([color].into_iter())
-                    .await
-                    .expect("RGB LED update failed");
-                previous = color;
-                next_led_update = Instant::now() + Duration::from_secs(1);
-            }
-            Either::Second(command) => match strip_state.handle_integer(command) {
-                Ok(true) => {
-                    encode_strip_frame(strip_state.state(), &mut strip_frame);
-                    strip
-                        .write_async(&strip_frame)
+        let update = if let Some(update) = deferred_update.take() {
+            update
+        } else {
+            match select(Timer::at(next_led_update), LED_COMMANDS.receive()).await {
+                Either::First(()) => {
+                    let color = random_led_color(&rng, previous);
+                    led.write([color].into_iter())
                         .await
-                        .expect("RGB strip update failed");
+                        .expect("RGB LED update failed");
+                    previous = color;
+                    next_led_update = Instant::now() + Duration::from_secs(1);
+                    continue;
                 }
-                Ok(false) => {}
-                Err(index) => rprintln!(
-                    "LED command {} rejected: index {} exceeds strip length {}",
-                    command, index, STRIP_LED_COUNT
-                ),
+                Either::Second(update) => update,
+            }
+        };
+        let changed = match update {
+            LedUpdate::Integer(command) => match strip_state.handle_integer(command) {
+                Ok(changed) => changed,
+                Err(index) => {
+                    rprintln!(
+                        "LED command {} rejected: index {} exceeds strip length {}",
+                        command, index, STRIP_LED_COUNT
+                    );
+                    false
+                }
             },
+            LedUpdate::Rgb(packet) => {
+                let mut queued = core::iter::from_fn(|| LED_COMMANDS.try_receive().ok())
+                    .take(LED_COMMANDS.len());
+                let (packet, next) = latest_rgb_packet(packet, &mut queued);
+                deferred_update = next;
+                strip_state.handle_rgb_packet(&packet)
+            }
+        };
+        if changed {
+            encode_strip_frame(strip_state.state(), &mut strip_frame);
+            strip
+                .write_async(&strip_frame)
+                .await
+                .expect("RGB strip update failed");
         }
     }
 }
@@ -643,7 +662,7 @@ async fn delayed_integers_task() {
             rprintln!("[DELAYED] Ready: index={}, value={}", index, value);
 
             if is_led_command(value) {
-                LED_COMMANDS.send(value).await;
+                LED_COMMANDS.send(LedUpdate::Integer(value)).await;
                 continue;
             }
 
@@ -727,11 +746,12 @@ async fn udp_task(stack: Stack<'static>) {
         };
         let packet = &buf[..len];
         
-        // Debug: Show what we received
         rprintln!("[UDP] ✓ Packet received: {} bytes", len);
-        
-        // Check if UDP payload is divisible by 16 and process as delayed integers
-        {
+
+        if let Some(rgb) = udp_rgb_packet(packet) {
+            LED_COMMANDS.send(LedUpdate::Rgb(*rgb)).await;
+        } else {
+            // Check if UDP payload is divisible by 16 and process as delayed integers
             let mut delayer = DELAYER.lock().await;
             let (is_iid_format, parsed_count) = delayer.append_value_if_dividable_by_16_and_not_1024(packet);
             
@@ -741,21 +761,21 @@ async fn udp_task(stack: Stack<'static>) {
             } else {
                 rprintln!("[UDP] ✗ Not IID format - will process as regular packet");
             }
-        }
-        
-        {
+            drop(delayer);
+
             let mut state = CONTROLLER.lock().await;
             let applied = process_udp(&mut state, packet);
             if DISPLAY_DEBUG_INFO {
                 DEBUG.signal(debug::describe(packet, applied, &state));
             }
+            drop(state);
+
+            for command in udp_led_commands(packet) {
+                LED_COMMANDS.send(LedUpdate::Integer(command)).await;
+            }
         }
 
-        for command in udp_led_commands(packet) {
-            LED_COMMANDS.send(command).await;
-        }
-
-        if len != 1024 {
+        if should_forward_udp(packet) {
             let packet = ForwardPacket::from_slice(packet).expect("UDP packet exceeds buffer");
             if UART_PACKETS.try_send(packet).is_err() {
                 rprintln!("UART forwarding queue full; UDP packet dropped");

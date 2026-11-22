@@ -4,6 +4,27 @@ use crate::config::STRIP_LED_COUNT;
 
 pub const LED_COMMAND_START: u32 = 200_000_000;
 pub const LED_COMMAND_END: u32 = 299_999_999;
+pub const RGB_PACKET_BYTES: usize = 100 * 3;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum LedUpdate {
+    Integer(u32),
+    Rgb([u8; RGB_PACKET_BYTES]),
+}
+
+/// Discards older consecutive frames without moving them across integer commands.
+pub fn latest_rgb_packet(
+    mut packet: [u8; RGB_PACKET_BYTES],
+    updates: &mut impl Iterator<Item = LedUpdate>,
+) -> ([u8; RGB_PACKET_BYTES], Option<LedUpdate>) {
+    for update in updates {
+        match update {
+            LedUpdate::Rgb(newer) => packet = newer,
+            command @ LedUpdate::Integer(_) => return (packet, Some(command)),
+        }
+    }
+    (packet, None)
+}
 
 pub fn is_led_command(value: u32) -> bool {
     (LED_COMMAND_START..=LED_COMMAND_END).contains(&value)
@@ -66,6 +87,19 @@ impl IntegerActionToLedStrip {
         Ok(true)
     }
 
+    /// Applies 100 RGB triplets, using only the configured number of LEDs.
+    pub fn handle_rgb_packet(&mut self, packet: &[u8; RGB_PACKET_BYTES]) -> bool {
+        let mut changed = false;
+        for (current, rgb) in self.state.iter_mut().zip(packet.chunks_exact(3)) {
+            let color = RGB8::new(rgb[0], rgb[1], rgb[2]);
+            if *current != color {
+                *current = color;
+                changed = true;
+            }
+        }
+        changed
+    }
+
     pub fn state(&self) -> &[RGB8; STRIP_LED_COUNT] {
         &self.state
     }
@@ -74,6 +108,30 @@ impl IntegerActionToLedStrip {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_only_the_latest_consecutive_rgb_frame() {
+        let mut updates = [
+            LedUpdate::Rgb([2; RGB_PACKET_BYTES]),
+            LedUpdate::Rgb([3; RGB_PACKET_BYTES]),
+        ].into_iter();
+        let (packet, next) = latest_rgb_packet([1; RGB_PACKET_BYTES], &mut updates);
+        assert_eq!(packet, [3; RGB_PACKET_BYTES]);
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn preserves_integer_commands_between_frames() {
+        let mut updates = [
+            LedUpdate::Rgb([2; RGB_PACKET_BYTES]),
+            LedUpdate::Integer(214_009_900),
+            LedUpdate::Rgb([3; RGB_PACKET_BYTES]),
+        ].into_iter();
+        let (packet, next) = latest_rgb_packet([1; RGB_PACKET_BYTES], &mut updates);
+        assert_eq!(packet, [2; RGB_PACKET_BYTES]);
+        assert_eq!(next, Some(LedUpdate::Integer(214_009_900)));
+        assert_eq!(updates.next(), Some(LedUpdate::Rgb([3; RGB_PACKET_BYTES])));
+    }
 
     #[test]
     fn updates_only_the_addressed_led_and_detects_unchanged_colors() {
@@ -115,6 +173,27 @@ mod tests {
             let green = (index as u8 + 1).min(99);
             assert_eq!(strip.state()[index], RGB8::new(0, green, 0));
         }
+    }
+
+    #[test]
+    fn rgb_packet_updates_each_led_and_preserves_full_byte_values() {
+        let mut strip = IntegerActionToLedStrip::new(RGB8::new(0, 0, 0));
+        let mut packet = [0; RGB_PACKET_BYTES];
+        for index in 0..100 {
+            packet[index * 3] = index as u8;
+            packet[index * 3 + 1] = 255 - index as u8;
+            packet[index * 3 + 2] = 200;
+        }
+
+        assert!(strip.handle_rgb_packet(&packet));
+        for index in 0..STRIP_LED_COUNT {
+            assert_eq!(strip.state()[index], RGB8::new(index as u8, 255 - index as u8, 200));
+        }
+        assert!(!strip.handle_rgb_packet(&packet));
+        assert_eq!(strip.handle_integer(200_009_900), Ok(true));
+        assert_eq!(strip.state()[0], RGB8::new(0, 99, 0));
+        assert!(strip.handle_rgb_packet(&packet));
+        assert_eq!(strip.state()[0], RGB8::new(0, 255, 200));
     }
 
     #[test]
