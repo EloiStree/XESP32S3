@@ -1,3 +1,5 @@
+<img width="3072" height="4080" alt="image" src="https://github.com/user-attachments/assets/87e4596e-861f-4d38-b943-54d9d2fccf19" />
+
 The aim of this toolbox is to simulate an XInput Xbox 360 controller, allowing you to play games while learning how to code.
 
 Learning to code involves understanding concepts such as 2D arrays and images. I recommend buying an SSD1306 display to practise your coding skills.
