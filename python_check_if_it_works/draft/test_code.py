@@ -8,7 +8,7 @@ import sys
 import time
 
 PORT = 3615
-FALLBACK_IP = "192.168.137.143"
+FALLBACK_IP = "192.168.137.106"
 RELEASE_ALL = 1390
 
 # (description, press code); release code is press + 1000
@@ -34,28 +34,29 @@ def resolve(host):
 
 
 def main():
-    host = sys.argv[1] if len(sys.argv) > 1 else "xbox.local"
-    ip = resolve(host)
-    print(f"Target: {host} -> {ip}:{PORT}")
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    def send(text):
-        sock.sendto(str(text).encode("ascii"), (ip, PORT))
+    while True:
+        host = FALLBACK_IP
+        print(f"Target: {host} -> :{PORT}")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    send(RELEASE_ALL)
-    for name, press in BUTTONS:
-        print(f"{name}: press {press}")
-        send(press)
-        time.sleep(0.6)
-        send(press + 1000)
-        time.sleep(0.2)
+        def send(text):
+            sock.sendto(str(text).encode("ascii"), (FALLBACK_IP, PORT))
 
-    print("Combo: A + D-pad up for 1 s")
-    send("1300 1311")
-    time.sleep(1)
-    send("2300 2311")
-    send(RELEASE_ALL)
-    print("Done.")
+        send(RELEASE_ALL)
+        for name, press in BUTTONS:
+            print(f"{name}: press {press}")
+            send(press)
+            time.sleep(0.6)
+            send(press + 1000)
+            time.sleep(0.2)
+
+        print("Combo: A + D-pad up for 1 s")
+        send("1300 1311")
+        time.sleep(1)
+        send("2300 2311")
+        send(RELEASE_ALL)
+        print("Done.")
 
 
 if __name__ == "__main__":
