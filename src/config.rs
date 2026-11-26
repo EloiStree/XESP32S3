@@ -44,6 +44,7 @@ const _: () = {
         UART2_TX_GPIO,
         SCREEN_SDA_GPIO,
         SCREEN_SCL_GPIO,
+        10, 11, 12, 13, 17, 18,
     ];
     let mut i = 0;
     while i < pins.len() {

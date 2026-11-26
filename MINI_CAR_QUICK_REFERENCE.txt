@@ -1,0 +1,96 @@
+// Quick Reference: Mini Car L298N UDP Commands
+// ==================================================
+// 
+// FORMAT: Exactly 10 bytes: "CAR:AADDDD"
+//   CAR   = Header (required)
+//   AA    = Pins 17-18 as ASCII digits '0'-'9'
+//   DDDD  = Pins 10-13 as binary '0' or '1'
+//
+// STRUCTURE:
+//   Byte 0: 'C'
+//   Byte 1: 'A'
+//   Byte 2: 'R'
+//   Byte 3: ':'
+//   Byte 4: Pin 17 analog ('0' to '9')
+//   Byte 5: Pin 18 analog ('0' to '9')
+//   Byte 6: Pin 10 direction ('0' or '1')
+//   Byte 7: Pin 11 direction ('0' or '1')
+//   Byte 8: Pin 12 direction ('0' or '1')
+//   Byte 9: Pin 13 direction ('0' or '1')
+
+// VALID EXAMPLES:
+// ==================================================
+// CAR:5610101  -> pin17='5'(5), pin18='6'(6), pins=1010
+// CAR:0000000  -> pin17='0'(0), pin18='0'(0), pins=0000
+// CAR:9911111  -> pin17='9'(9), pin18='9'(9), pins=1111
+// CAR:5500000  -> pin17='5'(5), pin18='5'(5), pins=0000
+// CAR:0010101  -> pin17='0'(0), pin18='0'(0), pins=1010
+
+// INVALID EXAMPLES (Will be rejected):
+// ==================================================
+// CAR:561010   - TOO SHORT (9 bytes)
+// CAR:56101010 - TOO LONG (11 bytes)
+// CAX:5610101  - INVALID HEADER
+// CAR:5A10101  - Non-digit analog
+// CAR:A610101  - Non-digit analog
+// CAR:56101X1  - Invalid direction bit
+
+// RUST USAGE:
+// ==================================================
+
+use xesp32s3::mini_car_l298n::MiniCarCommand;
+
+// Parse from UDP packet
+let packet = b"CAR:5610101";
+if let Some(cmd) = MiniCarCommand::try_from_udp(packet) {
+    // Access analog values as characters
+    println!("Pin 17: {}", cmd.pin_17_analog);  // Output: '5'
+    println!("Pin 18: {}", cmd.pin_18_analog);  // Output: '6'
+    
+    // Convert to numeric values (0-9)
+    println!("Pin 17 value: {}", cmd.pin_17_value());  // Output: 5
+    println!("Pin 18 value: {}", cmd.pin_18_value());  // Output: 6
+    
+    // Access direction control as booleans
+    println!("Pin 10: {}", cmd.pin_10);  // Output: true
+    println!("Pin 11: {}", cmd.pin_11);  // Output: false
+    println!("Pin 12: {}", cmd.pin_12);  // Output: true
+    println!("Pin 13: {}", cmd.pin_13);  // Output: false
+    
+    // Pretty print
+    println!("{}", cmd);  // Output: MiniCar{pin17:5, pin18:6, pins:1010}
+}
+
+// Create command manually
+let cmd = MiniCarCommand::new('5', '6', true, false, true, false);
+println!("{}", cmd);  // Output: MiniCar{pin17:5, pin18:6, pins:1010}
+
+// Use via network module
+use xesp32s3::network::udp_mini_car_command;
+
+if let Some(cmd) = udp_mini_car_command(packet) {
+    // Apply motor control based on parsed values
+    apply_pwm_pin_17(cmd.pin_17_value());   // 0-9
+    apply_pwm_pin_18(cmd.pin_18_value());   // 0-9
+    set_pin_10(cmd.pin_10);
+    set_pin_11(cmd.pin_11);
+    set_pin_12(cmd.pin_12);
+    set_pin_13(cmd.pin_13);
+}
+
+// PIN MAPPING FOR L298N MOTOR DRIVER:
+// ==================================================
+// Pin 17: PWM speed control (via char '0'-'9')
+// Pin 18: PWM speed control (via char '0'-'9')
+// Pin 10: Direction IN1 (via '0'/'1')
+// Pin 11: Direction IN2 (via '0'/'1')
+// Pin 12: Direction IN3 (via '0'/'1')
+// Pin 13: Direction IN4 (via '0'/'1')
+
+// TYPICAL DIRECTION PATTERNS:
+// ==================================================
+// Forward:  pins 1010 (IN1=1, IN2=0, IN3=1, IN4=0)
+// Backward: pins 0101 (IN1=0, IN2=1, IN3=0, IN4=1)
+// Left:     pins 1000 (IN1=1, IN2=0, IN3=0, IN4=0)
+// Right:    pins 0010 (IN1=0, IN2=0, IN3=1, IN4=0)
+// Stop:     pins 0000 (all pins off)

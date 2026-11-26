@@ -30,14 +30,17 @@ use ssd1306::{I2CDisplayInterface, Ssd1306};
 use xesp32s3::debug::{self, DebugInfo, DEBUG, WIFI_STATUS, WifiStatus};
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{IpAddress, IpEndpoint, Ipv4Address, Runner, Stack, StackResources};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{with_timeout, Duration, Instant, Timer};
 use embassy_usb::driver::{Endpoint, EndpointIn, EndpointOut};
 use embassy_usb::control::{InResponse, OutResponse, Request, RequestType};
 use embassy_usb::types::StringIndex;
 use embassy_usb::{Builder, Config as UsbConfig};
 use esp_hal::clock::CpuClock;
-use esp_hal::gpio::{AnyPin, Pin};
-use esp_hal::peripherals::{DMA_CH0, GPIO48, RMT, SPI2};
+use esp_hal::gpio::{AnyPin, DriveMode, Level, Output, OutputConfig, Pin};
+use esp_hal::ledc::{channel, timer, Ledc, LowSpeed, LSGlobalClkSource};
+use esp_hal::ledc::channel::ChannelIFace;
+use esp_hal::ledc::timer::TimerIFace;
+use esp_hal::peripherals::{DMA_CH0, GPIO48, LEDC, RMT, SPI2};
 use esp_hal::rmt::Rmt;
 use esp_hal::rng::Rng;
 use esp_hal::spi::master::{Config as SpiConfig, Spi};
@@ -62,7 +65,8 @@ use xesp32s3::config::{
 };
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
 use xesp32s3::integer_action_to_led_strip::{encode_strip_frame, is_led_command, latest_rgb_packet, IntegerActionToLedStrip, LedUpdate, STRIP_FRAME_BYTES};
-use xesp32s3::network::{process_udp, should_forward_udp, udp_led_commands, udp_rgb_packet, CONTROLLER};
+use xesp32s3::mini_car_l298n::MiniCarCommand;
+use xesp32s3::network::{process_udp, should_forward_udp, udp_led_commands, udp_mini_car_command, udp_rgb_packet, CONTROLLER};
 use xesp32s3::screen::{screen_pixels, udp_screen_packet, SCREEN_FRAME_BYTES};
 use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
@@ -80,6 +84,7 @@ type ForwardPacket = heapless::Vec<u8, MAX_UDP_PAYLOAD>;
 static UART_PACKETS: Channel<CriticalSectionRawMutex, ForwardPacket, 4> = Channel::new();
 static LED_COMMANDS: Channel<CriticalSectionRawMutex, LedUpdate, 32> = Channel::new();
 static SCREEN_FRAME: Signal<CriticalSectionRawMutex, [u8; SCREEN_FRAME_BYTES]> = Signal::new();
+static MINI_CAR_COMMAND: Signal<CriticalSectionRawMutex, MiniCarCommand> = Signal::new();
 
 static DELAYER: embassy_sync::mutex::Mutex<CriticalSectionRawMutex, IndexValueIntegerTimeMillisecondsDelayer> =
     embassy_sync::mutex::Mutex::new(IndexValueIntegerTimeMillisecondsDelayer::new(0.0, 0.0));
@@ -173,6 +178,17 @@ async fn main(spawner: Spawner) -> ! {
     let uart2_pin = take_configured_pin(&mut pins, UART2_TX_GPIO);
     let screen_sda = take_configured_pin(&mut pins, SCREEN_SDA_GPIO);
     let screen_scl = take_configured_pin(&mut pins, SCREEN_SCL_GPIO);
+    let car_pin_10 = take_configured_pin(&mut pins, 10);
+    let car_pin_11 = take_configured_pin(&mut pins, 11);
+    let car_pin_12 = take_configured_pin(&mut pins, 12);
+    let car_pin_13 = take_configured_pin(&mut pins, 13);
+    let car_pin_17 = take_configured_pin(&mut pins, 17);
+    let car_pin_18 = take_configured_pin(&mut pins, 18);
+
+    spawner.spawn(mini_car_task(
+        peripherals.LEDC, car_pin_10, car_pin_11, car_pin_12, car_pin_13,
+        car_pin_17, car_pin_18,
+    ).unwrap());
 
     // Wi-Fi station + embassy-net stack
     let wifi_controller = WifiController::new(peripherals.WIFI, Default::default())
@@ -333,6 +349,78 @@ fn take_configured_pin(pins: &mut [Option<AnyPin<'static>>], gpio: u8) -> AnyPin
         .find(|pin| pin.as_ref().is_some_and(|pin| pin.number() == gpio))
         .and_then(Option::take)
         .expect("configured GPIO is unavailable or already assigned")
+}
+
+#[embassy_executor::task]
+async fn mini_car_task(
+    peripheral: LEDC<'static>,
+    pin_10: AnyPin<'static>,
+    pin_11: AnyPin<'static>,
+    pin_12: AnyPin<'static>,
+    pin_13: AnyPin<'static>,
+    pin_17: AnyPin<'static>,
+    pin_18: AnyPin<'static>,
+) {
+    let mut direction = [
+        Output::new(pin_10, Level::Low, OutputConfig::default()),
+        Output::new(pin_11, Level::Low, OutputConfig::default()),
+        Output::new(pin_12, Level::Low, OutputConfig::default()),
+        Output::new(pin_13, Level::Low, OutputConfig::default()),
+    ];
+    let mut ledc = Ledc::new(peripheral);
+    ledc.set_global_slow_clock(LSGlobalClkSource::APBClk);
+    let mut timer = ledc.timer::<LowSpeed>(timer::Number::Timer0);
+    timer.configure(timer::config::Config {
+        duty: timer::config::Duty::Duty8Bit,
+        clock_source: timer::LSClockSource::APBClk,
+        frequency: Rate::from_khz(20),
+    }).expect("mini car PWM timer configuration failed");
+    let mut motor_a = ledc.channel(channel::Number::Channel0, pin_17);
+    let mut motor_b = ledc.channel(channel::Number::Channel1, pin_18);
+    for motor in [&mut motor_a, &mut motor_b] {
+        motor.configure(channel::config::Config {
+            timer: &timer,
+            duty_pct: 0,
+            drive_mode: DriveMode::PushPull,
+        }).expect("mini car PWM channel configuration failed");
+    }
+
+    let mut active = false;
+    loop {
+        let command = if active {
+            match with_timeout(Duration::from_secs(1), MINI_CAR_COMMAND.wait()).await {
+                Ok(command) => command,
+                Err(_) => {
+                    motor_a.set_duty(0).expect("mini car PWM stop failed");
+                    motor_b.set_duty(0).expect("mini car PWM stop failed");
+                    for pin in &mut direction {
+                        pin.set_level(Level::Low);
+                    }
+                    active = false;
+                    rprintln!("[CAR] Command timeout; motors stopped");
+                    continue;
+                }
+            }
+        } else {
+            MINI_CAR_COMMAND.wait().await
+        };
+
+        motor_a.set_duty(0).expect("mini car PWM update failed");
+        motor_b.set_duty(0).expect("mini car PWM update failed");
+        for (pin, high) in direction.iter_mut().zip([
+            command.pin_10, command.pin_11, command.pin_12, command.pin_13,
+        ]) {
+            pin.set_level(if high { Level::High } else { Level::Low });
+        }
+        motor_a.set_duty(command.pin_17_value() * 100 / 9)
+            .expect("mini car PWM update failed");
+        motor_b.set_duty(command.pin_18_value() * 100 / 9)
+            .expect("mini car PWM update failed");
+        active = command.pin_17_value() != 0
+            || command.pin_18_value() != 0
+            || command.pin_10 || command.pin_11 || command.pin_12 || command.pin_13;
+        rprintln!("[CAR] Applied {}", command);
+    }
 }
 
 #[embassy_executor::task]
@@ -768,6 +856,12 @@ async fn udp_task(stack: Stack<'static>) {
         let packet = &buf[..len];
         
         rprintln!("[UDP] ✓ Packet received: {} bytes", len);
+
+        if let Some(command) = udp_mini_car_command(packet) {
+            MINI_CAR_COMMAND.signal(command);
+        } else if packet.get(..4).is_some_and(|header| header.eq_ignore_ascii_case(b"CAR:")) {
+            rprintln!("[CAR] Invalid command: expected CAR:AADDDD (10 bytes)");
+        }
 
         if let Some(frame) = udp_screen_packet(packet) {
             SCREEN_FRAME.signal(*frame);
