@@ -32,6 +32,15 @@ pub const SCREEN_SDA_GPIO: u8 = 8;
 /// GPIO for OLED I2C clock.
 pub const SCREEN_SCL_GPIO: u8 = 9;
 
+/// Display the IP address and UTC time on a Waveshare monochrome V2 panel at boot.
+pub const EINK_STARTUP_ENABLED: bool = true;
+pub const EINK_BUSY_GPIO: u8 = 1;
+pub const EINK_RST_GPIO: u8 = 2;
+pub const EINK_DC_GPIO: u8 = 42;
+pub const EINK_CS_GPIO: u8 = 41;
+pub const EINK_CLK_GPIO: u8 = 40;
+pub const EINK_DIN_GPIO: u8 = 39;
+
 const fn valid_configurable_gpio(pin: u8) -> bool {
     matches!(pin, 1..=18 | 21 | 38..=42 | 45..=47)
 }
@@ -58,5 +67,26 @@ const _: () = {
             j += 1;
         }
         i += 1;
+    }
+    if EINK_STARTUP_ENABLED {
+        let eink_pins = [
+            EINK_BUSY_GPIO, EINK_RST_GPIO, EINK_DC_GPIO,
+            EINK_CS_GPIO, EINK_CLK_GPIO, EINK_DIN_GPIO,
+        ];
+        let mut i = 0;
+        while i < eink_pins.len() {
+            assert!(valid_configurable_gpio(eink_pins[i]), "unsupported e-paper GPIO");
+            let mut j = 0;
+            while j < pins.len() {
+                assert!(eink_pins[i] != pins[j], "GPIO assignments must be unique");
+                j += 1;
+            }
+            j = 0;
+            while j < i {
+                assert!(eink_pins[i] != eink_pins[j], "GPIO assignments must be unique");
+                j += 1;
+            }
+            i += 1;
+        }
     }
 };

@@ -2580,6 +2580,7 @@ dependencies = [
  "qrcodegen-no-heap",
  "rtt-target",
  "smart-leds-trait",
+ "smoltcp 0.13.1",
  "smoltcp 0.14.0",
  "ssd1306",
  "static_cell",

@@ -24,6 +24,7 @@ esp-bootloader-esp-idf = { version = "0.6.0", features = ["esp32s3"] }
 
 embassy-net = { version = "0.9.1", features = [
   "dhcpv4",
+  "dns",
   "medium-ethernet",
   "multicast",
   "tcp",
@@ -56,6 +57,11 @@ smoltcp = { version = "0.14.0", default-features = false, features = [
   "socket-raw",
   "socket-tcp",
   "socket-udp",
+] }
+# Enable reassembly on the version used internally by embassy-net.
+smoltcp-embassy = { package = "smoltcp", version = "0.13.1", default-features = false, features = [
+  "proto-ipv4-fragmentation",
+  "reassembly-buffer-size-8192",
 ] }
 trouble-host = { version = "0.7.0", features = ["gatt"] }
 

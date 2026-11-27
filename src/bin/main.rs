@@ -62,12 +62,15 @@ use static_cell::StaticCell;
 use xesp32s3::config::{
     DISPLAY_DEBUG_INFO, MDNS_HOST, SCREEN_SCL_GPIO, SCREEN_SDA_GPIO, STRIP_GPIO, STRIP_LED_COUNT,
     UART1_TX_GPIO, UART2_TX_GPIO, UART_BAUD_RATE, UDP_PORT, WIFI_PASSWORD, WIFI_SSID,
+    EINK_STARTUP_ENABLED, EINK_BUSY_GPIO, EINK_RST_GPIO, EINK_DC_GPIO, EINK_CS_GPIO,
+    EINK_CLK_GPIO, EINK_DIN_GPIO,
 };
+use xesp32s3::eink_200x200_screen_spi;
 use xesp32s3::mdns::{self, MDNS_GROUP, MDNS_PORT};
 use xesp32s3::integer_action_to_led_strip::{encode_strip_frame, is_led_command, latest_rgb_packet, IntegerActionToLedStrip, LedUpdate, STRIP_FRAME_BYTES};
 use xesp32s3::mini_car_l298n::MiniCarCommand;
 use xesp32s3::network::{process_udp, should_forward_udp, udp_led_commands, udp_mini_car_command, udp_rgb_packet, CONTROLLER};
-use xesp32s3::screen::{screen_pixels, udp_screen_packet, SCREEN_FRAME_BYTES};
+use xesp32s3::screen::{screen_pixels, udp_eink_screen_packet, udp_screen_packet, EINK_FRAME_BYTES, SCREEN_FRAME_BYTES};
 use xesp32s3::integer_delayer::IndexValueIntegerTimeMillisecondsDelayer;
 use xesp32s3::xinput;
 use xesp32s3::commands;
@@ -202,7 +205,23 @@ async fn main(spawner: Spawner) -> ! {
         mk_static!(StackResources<5>, StackResources::new()),
         seed,
     );
-
+    if EINK_STARTUP_ENABLED {
+        let spi = Spi::new(
+            peripherals.SPI3,
+            SpiConfig::default().with_frequency(Rate::from_mhz(4)),
+        )
+        .expect("e-paper SPI configuration failed")
+        .with_sck(take_configured_pin(&mut pins, EINK_CLK_GPIO))
+        .with_mosi(take_configured_pin(&mut pins, EINK_DIN_GPIO));
+        spawner.spawn(eink_200x200_screen_spi::startup_task(
+            stack,
+            spi,
+            take_configured_pin(&mut pins, EINK_BUSY_GPIO),
+            take_configured_pin(&mut pins, EINK_RST_GPIO),
+            take_configured_pin(&mut pins, EINK_DC_GPIO),
+            take_configured_pin(&mut pins, EINK_CS_GPIO),
+        ).unwrap());
+    }
     let uart_config = UartConfig::default().with_baudrate(UART_BAUD_RATE);
     let uart1 = UartTx::new(peripherals.UART1, uart_config)
         .expect("UART1 configuration failed")
@@ -844,7 +863,7 @@ async fn udp_task(stack: Stack<'static>) {
     let mut socket = UdpSocket::new(stack, &mut rx_meta, &mut rx_buffer, &mut tx_meta, &mut tx_buffer);
     socket.bind(UDP_PORT).expect("UDP bind failed");
 
-    let mut buf = [0u8; MAX_UDP_PAYLOAD];
+    let mut buf = [0u8; EINK_FRAME_BYTES];
     loop {
         let (len, _from) = match socket.recv_from(&mut buf).await {
             Ok(packet) => packet,
@@ -856,6 +875,19 @@ async fn udp_task(stack: Stack<'static>) {
         let packet = &buf[..len];
         
         rprintln!("[UDP] ✓ Packet received: {} bytes", len);
+
+        if let Some(frame) = udp_eink_screen_packet(packet) {
+            if !EINK_STARTUP_ENABLED {
+                rprintln!("[EINK] Frame dropped: e-paper display is disabled");
+            } else if !eink_200x200_screen_spi::queue_frame(frame) {
+                rprintln!("[EINK] Frame queue full; UDP frame dropped");
+            }
+            continue;
+        }
+        if len > MAX_UDP_PAYLOAD {
+            rprintln!("[UDP] Unsupported packet size: {} bytes", len);
+            continue;
+        }
 
         if let Some(command) = udp_mini_car_command(packet) {
             MINI_CAR_COMMAND.signal(command);
