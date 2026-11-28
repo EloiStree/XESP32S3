@@ -39,7 +39,7 @@ trigger_right_025= False
 trigger_right_050= True
 
 
-host = "192.168.137.106"
+host = "192.168.137.187"
 port = 3615
 
 def compress_binary_to_17_integer():
