@@ -8,26 +8,48 @@ If you buy an ESP32, you might also want to have some fun building a small four-
 
 # Hardware  
   
-**Freenove Board**     
-https://www.amazon.com.be/Freenove-Universal-Breakout-Raspberry-Switchable/dp/B0DT48T7CB  
+**Freenove Board**       
+[<img width="1055" height="761" alt="image" src="https://github.com/user-attachments/assets/104f7282-4b8d-4279-81d3-96097f4b6069" />](https://www.amazon.com.be/Freenove-Universal-Breakout-Raspberry-Switchable/dp/B0DT48T7CB)   
+https://www.amazon.com.be/Freenove-Universal-Breakout-Raspberry-Switchable/dp/B0DT48T7CB    
 
 **ESP32-S3**    
-https://www.amazon.com.be/-/en/Freenove-ESP32-S3-Development-Dual-core-Microcontroller/dp/B0DHJZ1V81/  
+[<img width="1002" height="803" alt="image" src="https://github.com/user-attachments/assets/9ca93073-cba8-4606-acb3-10cbdd6e80ac" />](https://www.amazon.com.be/-/en/Freenove-ESP32-S3-Development-Dual-core-Microcontroller/dp/B0DHJZ1V81/)  
+https://www.amazon.com.be/-/en/Freenove-ESP32-S3-Development-Dual-core-Microcontroller/dp/B0DHJZ1V81/    
+
+  
 
 **SSD1306 Display**     
+[<img width="631" height="339" alt="image" src="https://github.com/user-attachments/assets/7789ec0a-0545-4f69-8058-b58b31eccd7f" />](https://www.amazon.com.be/s?k=ssd1306)    
 https://www.amazon.com.be/s?k=ssd1306   
 
+   
+
 **5V WS2812B RGB LED Strip (1 m)**    
-https://www.amazon.com.be/dp/B0D5B7HDPP   
+[<img width="864" height="425" alt="image" src="https://github.com/user-attachments/assets/08be6ae1-1eb3-4b9e-9ec4-f23696659f17" />](https://www.amazon.com.be/dp/B0D5B7HDPP)   
+https://www.amazon.com.be/dp/B0D5B7HDPP  
+
+   
 
 **USB Power Supply for the LED Strip**   
 You will need a USB power supply to power the LED strip connected to the Freenove board.  
+[<img width="839" height="560" alt="image" src="https://github.com/user-attachments/assets/fcb6c01a-cba8-49c8-890b-29b5daff7766" />](https://www.amazon.com.be/dp/B0DNYGKXH5)   
 https://www.amazon.com.be/dp/B0DNYGKXH5   
 
+   
+
 **Level Shifter**    
-As you will most probably want to use microcontrollers that don't have Wi-Fi, a level shifter will help you connect and use them from a Godot/Unity application.    
-https://www.amazon.com.be/s?k=level+shifter   
+As you will most probably want to use microcontrollers that don't have Wi-Fi, a level shifter will help you connect and use them from a Godot/Unity application.      
+[<img width="792" height="398" alt="image" src="https://github.com/user-attachments/assets/e8c752a6-6612-4562-bc7a-d6f4bf321b55" />](https://www.amazon.com.be/s?k=level+shifter)   
+https://www.amazon.com.be/s?k=level+shifter    
+
+   
  
+
+**Paper Ink**
+[<img width="1192" height="775" alt="image" src="https://github.com/user-attachments/assets/bfd40cf5-9b90-4b78-ac86-82d993102f1d" />](https://www.amazon.com.be/s?k=200x200+eink+sharewave)
+https://www.amazon.com.be/s?k=200x200+eink+sharewave
+
+
 
 
 # Optional: Build a Small Car
