@@ -56,18 +56,24 @@ https://www.amazon.com.be/s?k=200x200+eink+sharewave
 
 If you want to take things a step further, you can build a small car using the following components:
 
-**L298N Motor Controller Module**  
-https://www.amazon.com.be/-/en/Controller-Stepper-Capacity-Regulator-Projects/dp/B0GXF8HB48
+**L298N Motor Controller Module**    
+[<img width="690" height="655" alt="image" src="https://github.com/user-attachments/assets/cc863862-c948-46ab-b9ac-b6f7ea006374" />](https://www.amazon.com.be/-/en/Controller-Stepper-Capacity-Regulator-Projects/dp/B0GXF8HB48)   
+https://www.amazon.com.be/-/en/Controller-Stepper-Capacity-Regulator-Projects/dp/B0GXF8HB48   
 
-**Motors**  
-https://www.amazon.com.be/-/en/3V-6V-Shaft-200RPM-intelligent-double/dp/B0FB3FLZ26/
+
+**Motors**     
+[<img width="409" height="331" alt="image" src="https://github.com/user-attachments/assets/c9f16f23-d17d-4cb4-b286-b9cd4de79b6e" />](https://www.amazon.com.be/-/en/3V-6V-Shaft-200RPM-intelligent-double/dp/B0FB3FLZ26/)   
+https://www.amazon.com.be/-/en/3V-6V-Shaft-200RPM-intelligent-double/dp/B0FB3FLZ26/   
+
+
 
 # Optional: Add a Camera
 
 Make your project even more fun by adding a camera.
 
-**XIAO ESP32-S3 Sense**  
-https://www.amazon.com.be/-/en/dp/B0C69FFVHH
+**XIAO ESP32-S3 Sense**    
+[<img width="1078" height="795" alt="image" src="https://github.com/user-attachments/assets/33b04e9a-e3b6-4f59-9f15-965e1ac91a1d" />](https://www.amazon.com.be/-/en/dp/B0C69FFVHH)   
+https://www.amazon.com.be/-/en/dp/B0C69FFVHH   
 
 
 
