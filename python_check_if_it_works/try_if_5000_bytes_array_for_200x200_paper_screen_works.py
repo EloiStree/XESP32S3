@@ -86,6 +86,13 @@ except ZoneInfoNotFoundError as exc:
 
 # Send UDP packet to the target IP and port.
 while True:
+
+    # Send a random pixel array before the clock frame.
+    random_frame = bytearray(__import__("random").getrandbits(8 * (width * height // 8)).to_bytes(width * height // 8, "big"))
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.sendto(bytes(random_frame), (target_ip, port))
+
+    time.sleep(5  )
     frame = bytearray(base_image)
     for row, (label, zone) in enumerate(time_zones):
         current_time = datetime.now(zone).strftime("%H:%M")
@@ -94,5 +101,6 @@ while True:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.sendto(bytes(frame), (target_ip, port))
     time.sleep(time_between_fresh   )
+
     
 

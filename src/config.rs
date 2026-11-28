@@ -41,6 +41,15 @@ pub const EINK_CS_GPIO: u8 = 41;
 pub const EINK_CLK_GPIO: u8 = 40;
 pub const EINK_DIN_GPIO: u8 = 39;
 
+pub const L298N_ANALOG_LEFT_GPIO: u8 = 6;
+pub const L298N_ANALOG_RIGHT_GPIO: u8 = 7;
+pub const L298N_DIGIT_LEFT_FORWARD_GPIO: u8 = 15;
+pub const L298N_DIGIT_LEFT_BACKWARD_GPIO: u8 = 16;
+pub const L298N_DIGIT_RIGHT_FORWARD_GPIO: u8 = 17;
+pub const L298N_DIGIT_RIGHT_BACKWARD_GPIO: u8 = 18;
+
+
+
 const fn valid_configurable_gpio(pin: u8) -> bool {
     matches!(pin, 1..=18 | 21 | 38..=42 | 45..=47)
 }
@@ -53,7 +62,12 @@ const _: () = {
         UART2_TX_GPIO,
         SCREEN_SDA_GPIO,
         SCREEN_SCL_GPIO,
-        10, 11, 12, 13, 17, 18,
+        L298N_ANALOG_LEFT_GPIO,
+        L298N_ANALOG_RIGHT_GPIO,
+        L298N_DIGIT_LEFT_FORWARD_GPIO,
+        L298N_DIGIT_LEFT_BACKWARD_GPIO,
+        L298N_DIGIT_RIGHT_FORWARD_GPIO,
+        L298N_DIGIT_RIGHT_BACKWARD_GPIO,
     ];
     let mut i = 0;
     while i < pins.len() {
